@@ -8,7 +8,7 @@ from tabulate import tabulate
 from ..state.connection import state_connection
 from ..state.device import device_state, Ios, Android
 from ..state.filemanager import file_manager_state
-from ..utils.helpers import sizeof_fmt
+from ..utils.helpers import sizeof_fmt, is_unix_absolute_path
 
 # variable used to cache entries from the ls-like
 # commands used in the below helpers. only used
@@ -55,7 +55,9 @@ def cd(args: list) -> None:
         return
 
     # moving one directory back
-    if path == '..':
+    device_path_separator = device_state.platform.path_separator
+
+    if path == '..' or path == '..'+device_path_separator:
 
         split_path = os.path.split(current_dir)
 
@@ -72,10 +74,14 @@ def cd(args: list) -> None:
 
     # if we got an absolute path, check if the path
     # actually exists, and then cd to it if we can
-    if os.path.isabs(path):
+    if is_unix_absolute_path(path):
 
         # assume the path does not exist by default
         does_exist = False
+
+        # normalise path to remove '../'
+        if '..'+device_path_separator in path:
+            path = os.path.normpath(path).replace('\\', device_path_separator)
 
         # check for existence based on the runtime
         if device_state.platform == Ios:
@@ -100,7 +106,13 @@ def cd(args: list) -> None:
     # see if its legit.
     else:
 
-        proposed_path = device_state.platform.path_separator.join([current_dir, path])
+        proposed_path = device_path_separator.join([current_dir, path])
+
+        # normalise path to remove '../'
+        if '..'+device_path_separator in proposed_path:
+            proposed_path = os.path.normpath(proposed_path).replace('\\', device_path_separator)
+            if proposed_path == '//':
+                return
 
         # assume the proposed_path does not exist by default
         does_exist = False
@@ -246,7 +258,7 @@ def ls(args: list) -> None:
         path = pwd()
     else:
         path = args[0]
-        if not os.path.isabs(path):
+        if not is_unix_absolute_path(path):
             path = device_state.platform.path_separator.join([pwd(), path])
 
     # based on the runtime, execute the correct ls method.
@@ -395,16 +407,19 @@ def download(args: list) -> None:
     """
 
     if len(args) < 1:
-        click.secho('Usage: file download <remote location> (optional: <local destination>)', bold=True)
+        click.secho('Usage: filesystem download <remote location> (optional: <local destination>)', bold=True)
         return
 
     # determine the source and destination file names.
     # if we didnt get a specification of where to dump the file,
     # assume the same name should be used locally.
     source = args[0]
-    destination = args[1] if len(args) > 1 else os.path.basename(source)
-
     should_download_folder = _should_download_folder(args)
+    # If the user specified a destination, use it. Otherwise, use the basename of the source.
+    if len(args) > (1 + should_download_folder):
+        destination = args[1]
+    else:
+        destination = os.path.basename(source)
 
     if device_state.platform == Ios:
         _download_ios(source, destination, should_download_folder)
@@ -424,7 +439,7 @@ def _download_ios(path: str, destination: str, should_download_folder: bool, pat
 
     # if the path we got is not absolute, join it with the
     # current working directory
-    if not os.path.isabs(path):
+    if not is_unix_absolute_path(path):
         path = device_state.platform.path_separator.join([pwd(), path])
 
     api = state_connection.get_api()
@@ -488,7 +503,7 @@ def _download_android(path: str, destination: str, should_download_folder: bool,
 
     # if the path we got is not absolute, join it with the
     # current working directory
-    if not os.path.isabs(path):
+    if not is_unix_absolute_path(path):
         path = device_state.platform.path_separator.join([pwd(), path])
 
     api = state_connection.get_api()
@@ -552,7 +567,7 @@ def upload(args: list) -> None:
     """
 
     if len(args) < 1:
-        click.secho('Usage: file upload <local source> (optional: <remote destination>)', bold=True)
+        click.secho('Usage: filesystem upload <local source> (optional: <remote destination>)', bold=True)
         return
 
     source = args[0]
@@ -575,7 +590,7 @@ def _upload_ios(path: str, destination: str) -> None:
         :return:
     """
 
-    if not os.path.isabs(destination):
+    if not is_unix_absolute_path(destination):
         destination = device_state.platform.path_separator.join([pwd(), destination])
 
     api = state_connection.get_api()
@@ -610,7 +625,7 @@ def _upload_android(path: str, destination: str) -> None:
         :return:
     """
 
-    if not os.path.isabs(destination):
+    if not is_unix_absolute_path(destination):
         destination = device_state.platform.path_separator.join([pwd(), destination])
 
     api = state_connection.get_api()
@@ -650,7 +665,7 @@ def rm(args: list) -> None:
 
     target = args[0]
 
-    if not os.path.isabs(target):
+    if not is_unix_absolute_path(target):
         target = device_state.platform.path_separator.join([pwd(), target])
 
     if not click.confirm('Really delete {0} ?'.format(target)):
@@ -721,7 +736,7 @@ def cat(args: list):
     """
 
     if len(args) < 1:
-        click.secho('Usage: file cat <remote location>', bold=True)
+        click.secho('Usage: filesystem cat <remote location>', bold=True)
         return
 
     # determine the source and destination file names.
@@ -731,10 +746,10 @@ def cat(args: list):
     _, destination = tempfile.mkstemp('.file')
 
     if device_state.platform == Ios:
-        _download_ios(source, destination)
+        _download_ios(source, destination, False)
 
     if device_state.platform == Android:
-        _download_android(source, destination)
+        _download_android(source, destination, False)
 
     click.secho('====', dim=True)
     with open(destination, 'r', encoding='utf-8', errors='ignore') as f:
@@ -853,7 +868,10 @@ def list_folders_in_current_fm_directory() -> dict:
         file_name, file_type = entry
 
         if file_type == 'directory':
-            resp[file_name] = file_name
+            if ' ' in file_name:
+                resp[f"'{file_name}'"] = file_name
+            else:
+                resp[file_name] = file_name
 
     return resp
 
@@ -884,7 +902,10 @@ def list_files_in_current_fm_directory() -> dict:
         file_name, file_type = entry
 
         if file_type == 'file':
-            resp[file_name] = file_name
+            if ' ' in file_name:
+                resp[f"'{file_name}'"] = file_name
+            else:
+                resp[file_name] = file_name
 
     return resp
 

@@ -1,12 +1,11 @@
+import os
 import re
 import shlex
 
 import click
-from pkg_resources import parse_version
-
+from packaging.version import Version
 from ..state.app import app_state
 from ..state.device import device_state, Ios, Android
-from ..state.jobs import job_manager_state
 
 
 def debug_print(message: str) -> None:
@@ -20,20 +19,6 @@ def debug_print(message: str) -> None:
 
     if app_state.should_debug():
         click.secho('[debug] {message}'.format(message=message), dim=True)
-
-
-def list_current_jobs() -> dict:
-    """
-        Return a list of the currently listed objection jobs.
-        Used for tab completion in the repl.
-    """
-
-    resp = {}
-
-    for job in job_manager_state.jobs:
-        resp[str(job.id)] = str(job.id)
-
-    return resp
 
 
 def pretty_concat(data: str, at_most: int = 75, left: bool = False) -> str:
@@ -110,6 +95,21 @@ def clean_argument_flags(args: list) -> list:
     return [x for x in args if not x.startswith('--')]
 
 
+def is_unix_absolute_path(path: str) -> bool:
+    """
+        Determines whether a path should be treated as absolute on
+        remote Unix-like targets.
+
+        On Windows hosts, os.path.isabs('/foo') may not behave as expected
+        for remote device paths that are always POSIX style.
+
+        :param path:
+        :return:
+    """
+
+    return path.startswith('/') or os.path.isabs(path)
+
+
 def to_snake_case(w: str) -> str:
     """
         https://stackoverflow.com/a/1176023
@@ -140,6 +140,10 @@ def print_frida_connection_help() -> None:
     click.secho('')
     click.secho('For more information, please refer to the objection wiki at: '
                 'https://github.com/sensepost/objection/wiki', fg='green')
+    
+def sanitize_version(version_str: str) -> str:
+    match = re.search(r"\d+(\.\d+)?", version_str or "")
+    return match.group(0) if match else "0"
 
 
 def warn_about_older_operating_systems() -> None:
@@ -150,21 +154,30 @@ def warn_about_older_operating_systems() -> None:
         :return:
     """
 
+    platform = getattr(device_state, 'platform', None)
+    version = getattr(device_state, 'version', None)
+    if platform is None or version is None:
+        return
+
     android_supported = '5'
     ios_supported = '9'
 
     # android & ios version warnings
-    if device_state.platform == Android and (
-            parse_version(device_state.version) < parse_version(android_supported)):
-        click.secho('Warning: You appear to be running Android {0} which may result in '
+    if platform == Android:
+        clean_version = sanitize_version(version)
+        try:
+            if Version(clean_version) < Version(android_supported):
+                click.secho('Warning: You appear to be running Android {0} which may result in '
                     'some hooks failing.\nIt is recommended to use at least an Android '
-                    'version {1} device with objection.'.format(device_state.version, android_supported),
+                    'version {1} device with objection.'.format(version, android_supported),
                     fg='yellow')
+        except Exception:
+            pass
 
     # android & ios version warnings
-    if device_state.platform == Ios and (
-            parse_version(device_state.version) < parse_version(ios_supported)):
+    if platform == Ios and (
+            Version(version) < Version(ios_supported)):
         click.secho('Warning: You appear to be running iOS {0} which may result in '
                     'some hooks failing.\nIt is recommended to use at least an iOS '
-                    'version {1} device with objection.'.format(device_state.version, ios_supported),
+                    'version {1} device with objection.'.format(version, ios_supported),
                     fg='yellow')

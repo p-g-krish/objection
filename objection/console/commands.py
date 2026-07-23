@@ -34,7 +34,6 @@ from ..commands.ios import nsuserdefaults
 from ..commands.ios import pasteboard
 from ..commands.ios import pinning as ios_pinning
 from ..commands.ios import plist
-from ..utils.helpers import list_current_jobs
 
 # commands are defined with their name being the key, then optionally
 # have a meta, dynamic and commands key.
@@ -63,7 +62,12 @@ COMMANDS = {
     },
 
     'reconnect': {
-        'meta': 'Reconnect to the current device',
+        'meta': 'Reconnect to the current app',
+        'exec': None,  # handled in the Repl class itself
+    },
+
+    'reconnect_spawn': {
+        'meta': 'Respawn the current app',
         'exec': None,  # handled in the Repl class itself
     },
 
@@ -140,23 +144,23 @@ COMMANDS = {
 
             # http file server
 
-            'http': {
-                'meta': 'Work with an on device HTTP file server',
-                'commands': {
-                    'start': {
-                        'meta': 'Start\'s an HTTP server in the current working directory',
-                        'exec': http.start
-                    },
-                    'status': {
-                        'meta': 'Get the status of the HTTP server',
-                        'exec': http.status
-                    },
-                    'stop': {
-                        'meta': 'Stop\'s a running HTTP server',
-                        'exec': http.stop
-                    }
-                }
-            },
+            # 'http': {
+            #     'meta': 'Work with an on device HTTP file server',
+            #     'commands': {
+            #         'start': {
+            #             'meta': 'Start\'s an HTTP server in the current working directory',
+            #             'exec': http.start
+            #         },
+            #         'status': {
+            #             'meta': 'Get the status of the HTTP server',
+            #             'exec': http.status
+            #         },
+            #         'stop': {
+            #             'meta': 'Stop\'s a running HTTP server',
+            #             'exec': http.stop
+            #         }
+            #     }
+            # },
         }
     },
 
@@ -265,7 +269,7 @@ COMMANDS = {
             },
             'kill': {
                 'meta': 'Kill a job. This unloads the script',
-                'dynamic': list_current_jobs,
+                'dynamic': jobs.list_current_jobs,
                 'exec': jobs.kill
             }
         }
@@ -457,6 +461,11 @@ COMMANDS = {
                     'launch_service': {
                         'meta': 'Launch a Service class using an Intent',
                         'exec': intents.launch_service
+                    },
+                    'implicit_intents': {
+                        'meta': 'Analyze implicit intents',
+                        'exec': intents.analyze_implicit_intents,
+                        'flags': ['--dump-backtrace']
                     }
                 }
             },
@@ -508,7 +517,7 @@ COMMANDS = {
         },
     },
     # ios commands
-        'ios': {
+    'ios': {
         'meta': 'Commands specific to iOS',
         'commands': {
             'info': {

@@ -1,4 +1,6 @@
-import * as fs from "fs";
+import { ObjC } from "../ios/lib/libobjc.js";
+import * as fs from "frida-fs";
+import { Buffer } from "buffer";
 import { hexStringToBytes } from "../lib/helpers.js";
 import { getNSFileManager } from "./lib/helpers.js";
 import {
@@ -87,7 +89,9 @@ export const pwd = (): string => {
 };
 
 // heavy lifting is done in frida-fs here.
-export const readFile = (path: string): Buffer => {
+export const readFile = (path: string): string | Buffer => {
+  if (fs.statSync(path).size == 0)
+    return Buffer.alloc(0);
   return fs.readFileSync(path);
 };
 

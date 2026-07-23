@@ -15,7 +15,10 @@ import {
   IKeychainData,
   IKeychainItem
 } from "./lib/interfaces.js";
-import { libObjc } from "./lib/libobjc.js";
+import { 
+  libObjc, 
+  ObjC 
+} from "./lib/libobjc.js";
 import {
   NSDictionary,
   NSMutableDictionary as NSMutableDictionaryType,
@@ -111,9 +114,7 @@ const enumerateKeychain = (): IKeychainData[] => {
   });
   
   const keyChainData: IKeychainData[] = [];
-  keyChainData.concat(...itemClassResults).filter((n) => n !== undefined);
-
-  return keyChainData;
+  return keyChainData.concat(...itemClassResults).filter((n) => n !== undefined);
 };
 
 // print raw entries using some Frida magic

@@ -1,5 +1,5 @@
+import { ObjC } from "../ios/lib/libobjc.js";
 import { colors as c } from "../lib/color.js";
-import { IJob } from "../lib/interfaces.js";
 import * as jobs from "../lib/jobs.js";
 
 
@@ -38,11 +38,7 @@ export const watch = (patternOrClass: string, dargs: boolean = false, dbt: boole
   // Add the job
   // We init a new job here as the child watch* calls will be grouped in a single job.
   // mostly commandline fluff
-  const job: IJob = {
-    identifier: jobs.identifier(),
-    invocations: [],
-    type: `ios-watch for: ${patternOrClass}`,
-  };
+  const job: jobs.Job = new jobs.Job(jobs.identifier(), `ios-watch for: ${patternOrClass}`);
   jobs.add(job);
 
   const isPattern = patternOrClass.includes('[');
@@ -60,7 +56,7 @@ export const watch = (patternOrClass: string, dargs: boolean = false, dbt: boole
   watchClass(patternOrClass, job, dargs, dbt, dret, watchParents);
 };
 
-const watchClass = (clazz: string, job: IJob, dargs: boolean = false, dbt: boolean = false,
+const watchClass = (clazz: string, job: jobs.Job, dargs: boolean = false, dbt: boolean = false,
   dret: boolean = false, parents: boolean = false): void => {
 
   const target = ObjC.classes[clazz];
@@ -81,7 +77,7 @@ const watchClass = (clazz: string, job: IJob, dargs: boolean = false, dbt: boole
 
 };
 
-const watchMethod = (selector: string, job: IJob, dargs: boolean, dbt: boolean,
+const watchMethod = (selector: string, job: jobs.Job, dargs: boolean, dbt: boolean,
   dret: boolean): void => {
 
   const resolver = new ApiResolver("objc");
@@ -164,12 +160,8 @@ const watchMethod = (selector: string, job: IJob, dargs: boolean, dbt: boolean,
       send(c.blackBright(`[${job.identifier}] `) + `Return Value: ${c.red(retval.toString())}`);
     },
   });
-  if (job.invocations) {
-    job.invocations.push(watchInvocation);
-  } else {
-    job.invocations = [ watchInvocation ];
-  }
   
+  job.addInvocation(watchInvocation);
 };
 
 export const setMethodReturn = (selector: string, returnValue: boolean): void => {
@@ -202,11 +194,7 @@ export const setMethodReturn = (selector: string, returnValue: boolean): void =>
   }
 
   // Start a new Job
-  const job: IJob = {
-    identifier: jobs.identifier(),
-    invocations: [],
-    type: `set-method-return for: ${selector}`,
-  };
+  const job: jobs.Job = new jobs.Job(jobs.identifier(), `set-method-return for: ${selector}`);
 
   // Attach to the discovered match
   // TODO: loop correctly when globbing
@@ -243,10 +231,6 @@ export const setMethodReturn = (selector: string, returnValue: boolean): void =>
   });
 
   // register the job
-  if (job.invocations) {
-    job.invocations.push(watchInvocation);
-  } else {
-    job.invocations = [ watchInvocation ];
-  };
+  job.addInvocation(watchInvocation);
   jobs.add(job);
 };

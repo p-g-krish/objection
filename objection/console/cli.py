@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 
 import click
+from frida import ServerNotRunningError
 
 from objection.commands.plugin_manager import load_plugin
 from objection.utils.agent import Agent, AgentConfig
@@ -30,7 +31,11 @@ def get_agent() -> Agent:
         uid=state_connection.uid
     ))
 
-    agent.run()
+    try:
+        agent.run()
+    except ServerNotRunningError:
+        click.secho('Frida server or gadget is not running on the target!', fg='red')
+        exit(1)
 
     return agent
 
@@ -39,12 +44,15 @@ def get_agent() -> Agent:
 @click.group()
 @click.option('--network', '-N', is_flag=True, help='Connect using a network connection instead of USB.',
               show_default=True)
+@click.option('--local', '-L', is_flag=True,
+              help='Connect using a local connection (for iOS Simulator).', show_default=True)
 @click.option('--host', '-h', default='127.0.0.1', show_default=True)
-@click.option('--port', '-p', required=False, default=27042, show_default=True)
+@click.option('--port', '-P', required=False, default=27042, show_default=True)
 @click.option('--api-host', '-ah', default='127.0.0.1', show_default=True)
 @click.option('--api-port', '-ap', required=False, default=8888, show_default=True)
 @click.option('--name', '-n', required=False,
               help='Name or bundle identifier to attach to.', show_default=True)
+@click.option('--gadget', '-g', is_eager=True, hidden=True, deprecated="Please use '-n' or '--name' instead")
 @click.option('--serial', '-S', required=False, default=None, help='A device serial to connect to.')
 @click.option('--debug', '-d', required=False, default=False, is_flag=True,
               help='Enable debug mode with verbose output.')
@@ -53,8 +61,8 @@ def get_agent() -> Agent:
 @click.option('--foremost', '-f', required=False, is_flag=True, help='Use the current foremost application.')
 @click.option('--debugger', required=False, default=False, is_flag=True, help='Enable the Chrome debug port.')
 @click.option('--uid', required=False, default=None, help='Specify the uid to run as (Android only).')
-def cli(network: bool, host: str, port: int, api_host: str, api_port: int,
-        name: str, serial: str, debug: bool, spawn: bool, no_pause: bool, 
+def cli(network: bool, local: bool, host: str, port: int, api_host: str, api_port: int,
+        name: str, gadget: str, serial: str, debug: bool, spawn: bool, no_pause: bool,
         foremost: bool, debugger: bool, uid: int) -> None:
     """
         \b
@@ -71,10 +79,21 @@ def cli(network: bool, host: str, port: int, api_host: str, api_port: int,
     if debug:
         app_state.debug = debug
 
-    if network:
+    if network and local:
+        raise click.UsageError('The --local flag cannot be used with --network.')
+
+    if local:
+        state_connection.use_local()
+        state_connection.host = None
+        state_connection.port = None
+    elif network:
         state_connection.use_network()
         state_connection.host = host
         state_connection.port = port
+    else:
+        state_connection.use_usb()
+        state_connection.host = None
+        state_connection.port = None
 
     if serial:
         state_connection.device_id = serial
@@ -82,6 +101,10 @@ def cli(network: bool, host: str, port: int, api_host: str, api_port: int,
     # set api parameters
     app_state.api_host = api_host
     app_state.api_port = api_port
+
+    # Backwards compatibility
+    if gadget is not None:
+        name = gadget
 
     state_connection.name = name
     state_connection.spawn = spawn
@@ -141,7 +164,8 @@ def start(plugin_folder: str, quiet: bool, startup_command: str, file_commands, 
 
     if startup_script:
         click.secho(f'Importing and running startup script at: {startup_script}', dim=True)
-        agent.attach_script(startup_script.read())
+        script_name = f'startup_script<{startup_script.name}>'
+        agent.attach_script(script_name, startup_script.read())
 
     if startup_command:
         for command in startup_command:
@@ -178,6 +202,33 @@ def start(plugin_folder: str, quiet: bool, startup_command: str, file_commands, 
     # drop into the repl
     repl.run(quiet=quiet)
 
+# Some ugly backwards compatibility
+@cli.command(deprecated="Use 'objection start' instead of 'objection explore'", hidden=True)
+@click.option('--plugin-folder', '-P', required=False, default=None, help='The folder to load plugins from.')
+@click.option('--quiet', '-q', required=False, default=False, is_flag=True)
+@click.option('--startup-command', '-s', required=False, multiple=True,
+              help='A command to run before the repl polls the device for information.')
+@click.option('--file-commands', '-c', required=False, type=click.File('r'),
+              help=('A file containing objection commands, separated by a '
+                    'newline, that will run before the repl polls the device for information.'))
+@click.option('--startup-script', '-S', required=False, type=click.File('r'),
+              help='A script to import and run before the repl polls the device for information.')
+@click.option('--enable-api', '-a', required=False, default=False, is_flag=True,
+              help='Start the objection API server.')
+def explore(plugin_folder: str, quiet: bool, startup_command: str, file_commands, startup_script: click.File,
+            enable_api: bool) -> None:
+    """
+        Deprecated: Use 'start' instead.
+    """
+    # Call the start command's callback directly
+    ctx = click.get_current_context()
+    ctx.invoke(start,
+               plugin_folder=plugin_folder,
+               quiet=quiet,
+               startup_command=startup_command,
+               file_commands=file_commands,
+               startup_script=startup_script,
+               enable_api=enable_api)
 
 @cli.command()
 @click.option('--hook-debug', '-d', required=False, default=False, is_flag=True,
@@ -234,7 +285,7 @@ def version() -> None:
 @click.option('--script-source', '-l', default=None, help=(
         'A script file to use with the the "path" config type. '
         'Remember that use the name of this file in your "path". It will be next to the config.'), show_default=False)
-@click.option('--bundle-id', '-b', default=None, help='The bundleid to set when codesigning the IPA')
+@click.option('--bundle-id', '-B', default=None, help='The bundleid to set when codesigning the IPA')
 def patchipa(source: str, gadget_version: str, codesign_signature: str, provision_file: str, binary_name: str,
              skip_cleanup: bool, pause: bool, unzip_unicode: bool, gadget_config: str, script_source: str,
              bundle_id: str) -> None:
@@ -279,9 +330,11 @@ def patchipa(source: str, gadget_version: str, codesign_signature: str, provisio
               help='Do not change the extractNativeLibs flag in the AndroidManifest.xml.', show_default=False)
 @click.option('--manifest', '-m', help='A decoded AndroidManifest.xml file to read.', default=None)
 @click.option('--only-main-classes', help="Only patch classes that are in the main dex file.", is_flag=True, default=False)
+@click.option('--fix-concurrency-to', '-j', help="Only use N threads for repackaging - set to 1 if running into OOM errors.", default=None)
+
 def patchapk(source: str, architecture: str, gadget_version: str, pause: bool, skip_cleanup: bool,
              enable_debug: bool, skip_resources: bool, network_security_config: bool, target_class: str,
-             use_aapt2: bool, gadget_config: str, script_source: str, ignore_nativelibs: bool, manifest: str, skip_signing: bool, only_main_classes:bool = False) -> None:
+             use_aapt2: bool, gadget_config: str, script_source: str, ignore_nativelibs: bool, manifest: str, skip_signing: bool, only_main_classes:bool = False, fix_concurrency_to = None) -> None:
     """
         Patch an APK with the frida-gadget.so.
     """

@@ -3,14 +3,16 @@ import {
   IKeyStoreDetail,
   IKeyStoreEntry
 } from "./lib/interfaces.js";
-import { wrapJavaPerform } from "./lib/libjava.js";
+import { 
+  wrapJavaPerform, 
+  Java 
+} from "./lib/libjava.js";
 import {
   KeyFactory,
   KeyInfo,
   KeyStore,
   SecretKeyFactory
 } from "./lib/types.js";
-import { IJob } from "../lib/interfaces.js";
 import * as jobs from "../lib/jobs.js";
 
 // Dump entries in the Android Keystore, together with a flag
@@ -181,50 +183,70 @@ export const clear = () => {
 
 // Watch for KeyStore.load();
 // TODO: Store the keystores themselves maybe?
-const keystoreLoad = (ident: string): any | undefined => {
+const keystoreLoad = (ident: number): Promise<any> => {
   return wrapJavaPerform(() => {
-    const ks: KeyStore = Java.use("java.security.KeyStore");
-    const ksLoad = ks.load.overload("java.io.InputStream", "[C");
-    send(c.blackBright(`[${ident}] Watching Keystore.load("java.io.InputStream", "[C")`));
+    try {
+      const ks: KeyStore = Java.use("java.security.KeyStore");
+      const ksLoad = ks.load.overload("java.io.InputStream", "[C");
+      send(c.blackBright(`[${ident}] Watching Keystore.load("java.io.InputStream", "[C")`));
 
-    ksLoad.implementation = function (stream, password) {
-      send(c.blackBright(`[${ident}] `) +
-        `Keystore.load(${c.greenBright(stream)}, ${c.redBright(password || `null`)}) ` +
-        `called, loading a ${c.cyanBright(this.getType())} keystore.`);
-      return this.load(stream, password);
-    };
+      ksLoad.implementation = function (stream, password) {
+        send(c.blackBright(`[${ident}] `) +
+          `Keystore.load(${c.greenBright(stream)}, ${c.redBright(password || `null`)}) ` +
+          `called, loading a ${c.cyanBright(this.getType())} keystore.`);
+        return this.load(stream, password);
+      };
+
+      return ksLoad;
+    } catch (err) {
+      const message = (err as Error).stack || String(err);
+      if (message.indexOf("java.lang.ClassNotFoundException") !== -1) {
+        return null;
+      }
+
+      send(c.red(`[${ident}] Error overriding KeyStore.load(): ${message}`));
+      return null;
+    }
   });
 };
 
 // Watch for Keystore.getKey().
 // TODO: Extract more information, like the key itself maybe?
-const keystoreGetKey = (ident: string): any | undefined => {
+const keystoreGetKey = (ident: number): Promise<any> => {
   return wrapJavaPerform(() => {
-    const ks: KeyStore = Java.use("java.security.KeyStore");
-    const ksGetKey = ks.getKey.overload("java.lang.String", "[C");
-    send(c.blackBright(`[${ident}] Watching Keystore.getKey("java.lang.String", "[C")`));
+    try {
+      const ks: KeyStore = Java.use("java.security.KeyStore");
+      const ksGetKey = ks.getKey.overload("java.lang.String", "[C");
+      send(c.blackBright(`[${ident}] Watching Keystore.getKey("java.lang.String", "[C")`));
 
-    ksGetKey.implementation = function (alias, password) {
-      const key = this.getKey(alias, password);
-      send(c.blackBright(`[${ident}] `) +
-        `Keystore.getKey(${c.greenBright(alias)}, ${c.redBright(password || `null`)}) ` +
-        `called, returning a ${c.greenBright(key.$className)} instance.`);
-      return key;
-    };
-    return ksGetKey;
+      ksGetKey.implementation = function (alias, password) {
+        const key = this.getKey(alias, password);
+        send(c.blackBright(`[${ident}] `) +
+          `Keystore.getKey(${c.greenBright(alias)}, ${c.redBright(password || `null`)}) ` +
+          `called, returning a ${c.greenBright(key.$className)} instance.`);
+        return key;
+      };
+
+      return ksGetKey;
+    } catch (err) {
+      const message = (err as Error).stack || String(err);
+      if (message.indexOf("java.lang.ClassNotFoundException") !== -1) {
+        return null;
+      }
+
+      send(c.red(`[${ident}] Error overriding KeyStore.getKey(): ${message}`));
+      return null;
+    }
   });
 };
 
 // Android KeyStore watcher.
 // Many, many more methods can be added here..
-export const watchKeystore = (): void => {
-  const job: IJob = {
-    identifier: jobs.identifier(),
-    type: "android-keystore-watch",
-  };
-  job.implementations = [];
+export const watchKeystore = async (): Promise<void> =>  {
+  const job: jobs.Job = new jobs.Job(jobs.identifier(), "android-keystore-watch");
 
-  job.implementations.push(keystoreLoad(job.identifier));
-  job.implementations.push(keystoreGetKey(job.identifier));
+  job.addImplementation(await keystoreLoad(job.identifier));
+  job.addImplementation(await keystoreGetKey(job.identifier));
+  
   jobs.add(job);
 };

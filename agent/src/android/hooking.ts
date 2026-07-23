@@ -1,11 +1,11 @@
 import { colors as c } from "../lib/color.js";
-import { IJob } from "../lib/interfaces.js";
 import * as jobs from "../lib/jobs.js";
 import { ICurrentActivityFragment } from "./lib/interfaces.js";
 import {
   getApplicationContext,
   R,
-  wrapJavaPerform
+  wrapJavaPerform,
+  Java
 } from "./lib/libjava.js";
 import {
   Activity,
@@ -17,11 +17,17 @@ import {
   Throwable,
   JavaMethodsOverloadsResult,
 } from "./lib/types.js";
+import type { default as JavaTypes } from "frida-java-bridge";
 
 enum PatternType {
   Regex = 'regex',
   Klass = 'klass',
 }
+
+const isClassNotFoundError = (err: unknown): boolean => {
+  const message = (err as Error).stack || String(err);
+  return message.indexOf("java.lang.ClassNotFoundException") !== -1;
+};
 
 const splitClassMethod = (fqClazz: string): string[] => {
   // split a fully qualified class name, assuming the last period denotes the method
@@ -67,15 +73,11 @@ const getPatternType = (pattern: string): PatternType => {
 export const lazyWatchForPattern = (query: string, watch: boolean, dargs: boolean, dret: boolean, dbt: boolean): void => {
   // TODO: Use param to control interval
   let found = false;
-  const job: IJob = {
-    identifier: jobs.identifier(),
-    implementations: [],
-    type: `notify-class for: ${query}`,
-  };
+  const job: jobs.Job = new jobs.Job(jobs.identifier(),`notify-class for: ${query}`);
 
   // This method loops over all enumerate matches and then calls watch
   // with the arguments specified in the parent function
-  const watchMatches = (matches: Java.EnumerateMethodsMatchGroup[]) => {
+  const watchMatches = (matches: JavaTypes.EnumerateMethodsMatchGroup[]) => {
     matches.forEach(match => {
       match.classes.forEach(_class => {
         _class.methods.forEach(_method => {
@@ -119,7 +121,7 @@ export const lazyWatchForPattern = (query: string, watch: boolean, dargs: boolea
   }, 1000 * 5);
 };
 
-export const javaEnumerate = (query: string): Promise<Java.EnumerateMethodsMatchGroup[]> => {
+export const javaEnumerate = (query: string): Promise<JavaTypes.EnumerateMethodsMatchGroup[]> => {
   // If the query is just a classname, strongarm it into a pattern.
   if (getPatternType(query) === PatternType.Klass) {
     query = `*${query}*!*`;
@@ -262,11 +264,7 @@ export const watch = (pattern: string, dargs: boolean, dbt: boolean, dret: boole
   if (patternType === PatternType.Klass) {
 
     // start a new job container
-    const job: IJob = {
-      identifier: jobs.identifier(),
-      implementations: [],
-      type: `watch-class for: ${pattern}`,
-    };
+    const job: jobs.Job = new jobs.Job(jobs.identifier(),`watch-class for: ${pattern}`);
 
     const w = watchClass(pattern, job, dargs, dbt, dret);
     jobs.add(job);
@@ -275,17 +273,13 @@ export const watch = (pattern: string, dargs: boolean, dbt: boolean, dret: boole
   }
 
   // assume we have PatternType.Regex
-  const job: IJob = {
-    identifier: jobs.identifier(),
-    implementations: [],
-    type: `watch-pattern for: ${pattern}`,
-  };
+  const job: jobs.Job = new jobs.Job(jobs.identifier(),`watch-pattern for: ${pattern}`);
   jobs.add(job);
 
   return new Promise((resolve, reject) => {
-    javaEnumerate(pattern).then((matches: Java.EnumerateMethodsMatchGroup[]) => {
-      matches.forEach((match: Java.EnumerateMethodsMatchGroup) => {
-        match.classes.forEach((klass: Java.EnumerateMethodsMatchClass) => {
+    javaEnumerate(pattern).then((matches: JavaTypes.EnumerateMethodsMatchGroup[]) => {
+      matches.forEach((match: JavaTypes.EnumerateMethodsMatchGroup) => {
+        match.classes.forEach((klass: JavaTypes.EnumerateMethodsMatchClass) => {
           klass.methods.forEach(method => {
             // Only watch matched methods
             watchMethod(`${klass.name}.${method}`, job, dargs, dbt, dret);
@@ -299,114 +293,128 @@ export const watch = (pattern: string, dargs: boolean, dbt: boolean, dret: boole
   });
 };
 
-const watchClass = (clazz: string, job: IJob, dargs: boolean = false, dbt: boolean = false, dret: boolean = false): Promise<void> => {
+const watchClass = (clazz: string, job: jobs.Job, dargs: boolean = false, dbt: boolean = false, dret: boolean = false): Promise<void> => {
   return wrapJavaPerform(() => {
-    const clazzInstance: JavaClass = Java.use(clazz);
+    try {
+      const clazzInstance: JavaClass = Java.use(clazz);
 
-    clazzInstance.class.getDeclaredMethods().map((method) => {
-      // perform a cleanup of the method. An example after toGenericString() would be:
-      // public void android.widget.ScrollView.draw(android.graphics.Canvas) throws Exception
-      // public final rx.c.b<java.lang.Throwable> com.apple.android.music.icloud.a.a(rx.c.b<java.lang.Throwable>)
-      let m: string = method.toGenericString();
+      clazzInstance.class.getDeclaredMethods().map((method) => {
+        // perform a cleanup of the method. An example after toGenericString() would be:
+        // public void android.widget.ScrollView.draw(android.graphics.Canvas) throws Exception
+        // public final rx.c.b<java.lang.Throwable> com.apple.android.music.icloud.a.a(rx.c.b<java.lang.Throwable>)
+        let m: string = method.toGenericString();
 
-      // Remove generics from the method
-      while (m.includes("<")) { m = m.replace(/<.*?>/g, ""); }
+        // Remove generics from the method
+        while (m.includes("<")) { m = m.replace(/<.*?>/g, ""); }
 
-      // remove any "Throws" the method may have
-      if (m.indexOf(" throws ") !== -1) { m = m.substring(0, m.indexOf(" throws ")); }
+        // remove any "Throws" the method may have
+        if (m.indexOf(" throws ") !== -1) { m = m.substring(0, m.indexOf(" throws ")); }
 
-      // remove scope and return type declarations (aka: first two words)
-      // remove the class name
-      // remove the signature and return
-      m = m.slice(m.lastIndexOf(" "));
-      m = m.replace(` ${clazz}.`, "");
+        // remove scope and return type declarations (aka: first two words)
+        // remove the class name
+        // remove the signature and return
+        m = m.slice(m.lastIndexOf(" "));
+        m = m.replace(` ${clazz}.`, "");
 
-      return m.split("(")[0];
+        return m.split("(")[0];
 
-    }).filter((value, index, self) => {
+      }).filter((value, index, self) => {
 
-      return self.indexOf(value) === index;
-    }).forEach((method) => {
+        return self.indexOf(value) === index;
+      }).forEach((method) => {
 
-      // get the argument types for this overload
-      // send(`Watching ${c.green(clazz)}.${c.greenBright(method)}()`);
-      const fqClazz = `${clazz}.${method}`;
-      watchMethod(fqClazz, job, dargs, dbt, dret);
-    });
+        // get the argument types for this overload
+        // send(`Watching ${c.green(clazz)}.${c.greenBright(method)}()`);
+        const fqClazz = `${clazz}.${method}`;
+        watchMethod(fqClazz, job, dargs, dbt, dret);
+      });
+    } catch (err) {
+      const message = (err as Error).stack || String(err);
+      if (isClassNotFoundError(err)) {
+        return;
+      }
+
+      send(c.red(`Error preparing watch for class ${clazz}: ${message}`));
+    }
   });
 };
 
 const watchMethod = (
-  fqClazz: string, job: IJob, dargs: boolean, dbt: boolean, dret: boolean,
+  fqClazz: string, job: jobs.Job, dargs: boolean, dbt: boolean, dret: boolean,
 ): Promise<void> => {
   const [clazz, method] = splitClassMethod(fqClazz);
   // send(`Attempting to watch class ${c.green(clazz)} and method ${c.green(method)}.`);
 
   return wrapJavaPerform(() => {
-    const throwable: Throwable = Java.use("java.lang.Throwable");
-    const targetClass: JavaClass = Java.use(clazz);
+    try {
+      const throwable: Throwable = Java.use("java.lang.Throwable");
+      const targetClass: JavaClass = Java.use(clazz);
 
-    // Ensure that the method exists on the class
-    if (targetClass[method] === undefined) {
-      send(`${c.red("Error:")} Unable to find method ${c.redBright(method)} in class ${c.green(clazz)}`);
-      return;
-    }
-
-    targetClass[method].overloads.forEach((m: any) => {
-      // get the argument types for this overload
-      const calleeArgTypes: string[] = m.argumentTypes.map((arg) => arg.className);
-
-      send(`Watching ${c.green(clazz)}.${c.greenBright(method)}(${c.red(calleeArgTypes.join(", "))})`);
-      // replace the implementation of this method
-      // tslint:disable-next-line:only-arrow-functions
-      m.implementation = function () {
-        send(
-          c.blackBright(`[${job.identifier}] `) +
-          `Called ${c.green(clazz)}.${c.greenBright(m.methodName)}(${c.red(calleeArgTypes.join(", "))})`,
-        );
-
-        // dump a backtrace
-        if (dbt) {
-          send(
-            c.blackBright(`[${job.identifier}] `) + "Backtrace:\n\t" +
-            throwable.$new().getStackTrace().map((traceElement) => traceElement.toString() + "\n\t").join(""),
-          );
-        }
-
-        // dump arguments
-        if (dargs && calleeArgTypes.length > 0) {
-          const argValues: string[] = [];
-          for (const h of arguments) {
-            argValues.push((h || "(none)").toString());
-          }
-
-          send(
-            c.blackBright(`[${job.identifier}] `) +
-            `Arguments ${c.green(clazz)}.${c.greenBright(m.methodName)}(${c.red(argValues.join(", "))})`,
-          );
-        }
-
-        // actually run the intended method
-        const retVal: any = m.apply(this, arguments);
-
-        // dump the return value
-        if (dret) {
-          const retValStr: string = (retVal || "(none)").toString();
-          send(c.blackBright(`[${job.identifier}] `) + `Return Value: ${c.red(retValStr)}`);
-        }
-
-        // also return the captured return value
-        return retVal;
-      };
-
-      // Push the implementation so that it can be nulled later
-      if (job.implementations) {
-        job.implementations.push(m);
-      } else {
-        job.implementations = [ m ];
+      // Ensure that the method exists on the class
+      if (targetClass[method] === undefined) {
+        send(`${c.red("Error:")} Unable to find method ${c.redBright(method)} in class ${c.green(clazz)}`);
+        return;
       }
 
-    });
+      targetClass[method].overloads.forEach((m: any) => {
+        // get the argument types for this overload
+        const calleeArgTypes: string[] = m.argumentTypes.map((arg) => arg.className);
+
+        send(`Watching ${c.green(clazz)}.${c.greenBright(method)}(${c.red(calleeArgTypes.join(", "))})`);
+        // replace the implementation of this method
+        // tslint:disable-next-line:only-arrow-functions
+        m.implementation = function () {
+          send(
+            c.blackBright(`[${job.identifier}] `) +
+            `Called ${c.green(clazz)}.${c.greenBright(m.methodName)}(${c.red(calleeArgTypes.join(", "))})`,
+          );
+
+          // dump a backtrace
+          if (dbt) {
+            send(
+              c.blackBright(`[${job.identifier}] `) + "Backtrace:\n\t" +
+              throwable.$new().getStackTrace().map((traceElement) => traceElement.toString() + "\n\t").join(""),
+            );
+          }
+
+          // dump arguments
+          if (dargs && calleeArgTypes.length > 0) {
+            const argValues: string[] = [];
+            for (const h of arguments) {
+              argValues.push((h || "(none)").toString());
+            }
+
+            send(
+              c.blackBright(`[${job.identifier}] `) +
+              `Arguments ${c.green(clazz)}.${c.greenBright(m.methodName)}(${c.red(argValues.join(", "))})`,
+            );
+          }
+
+          // actually run the intended method
+          const retVal: any = m.apply(this, arguments);
+
+          // dump the return value
+          if (dret) {
+            const retValStr: string = (retVal || "(none)").toString();
+            send(c.blackBright(`[${job.identifier}] `) + `Return Value: ${c.red(retValStr)}`);
+          }
+
+          // also return the captured return value
+          return retVal;
+        };
+
+        // Push the implementation so that it can be nulled later
+        job.addImplementation(m);
+
+      });
+    } catch (err) {
+      const message = (err as Error).stack || String(err);
+      if (isClassNotFoundError(err)) {
+        return;
+      }
+
+      send(c.red(`Error watching ${fqClazz}: ${message}`));
+    }
   });
 };
 
@@ -534,50 +542,50 @@ export const setReturnValue = (fqClazz: string, filterOverload: string | null, n
   }
 
   return wrapJavaPerform(() => {
-    const job: IJob = {
-      identifier: jobs.identifier(),
-      implementations: [],
-      type: `set-return for: ${fqClazz}`,
-    };
+    try {
+      const job: jobs.Job = new jobs.Job(jobs.identifier(), `set-return for: ${fqClazz}`);
 
-    const targetClazz: JavaClass = Java.use(clazz);
+      const targetClazz: JavaClass = Java.use(clazz);
 
-    targetClazz[method].overloads.forEach((m: any) => {
-      // get the argument types for this method
-      const calleeArgTypes: string[] = m.argumentTypes.map((arg) => arg.className);
+      targetClazz[method].overloads.forEach((m: any) => {
+        // get the argument types for this method
+        const calleeArgTypes: string[] = m.argumentTypes.map((arg) => arg.className);
 
-      // check if we need to filter on a specific overload
-      if (filterOverload != null && calleeArgTypes.join(",") !== filterOverload) {
+        // check if we need to filter on a specific overload
+        if (filterOverload != null && calleeArgTypes.join(",") !== filterOverload) {
+          return;
+        }
+
+        send(`Hooking ${c.green(clazz)}.${c.greenBright(method)}(${c.red(calleeArgTypes.join(", "))})`);
+
+        // tslint:disable-next-line:only-arrow-functions
+        m.implementation = function () {
+          let retVal = m.apply(this, arguments);
+
+          // Override retval if needed
+          if (retVal !== newRet) {
+            send(
+              c.blackBright(`[${job.identifier}] `) + `Return value was not ${c.red(newRet.toString())}, ` +
+              `setting to ${c.green(newRet.toString())}.`,
+            );
+            // update the return value
+            retVal = newRet;
+          }
+          return retVal;
+        };
+
+        // record override
+        job.addImplementation(m);
+      });
+
+      jobs.add(job);
+    } catch (err) {
+      const message = (err as Error).stack || String(err);
+      if (isClassNotFoundError(err)) {
         return;
       }
 
-      send(`Hooking ${c.green(clazz)}.${c.greenBright(method)}(${c.red(calleeArgTypes.join(", "))})`);
-
-      // tslint:disable-next-line:only-arrow-functions
-      m.implementation = function () {
-        let retVal = m.apply(this, arguments);
-
-        // Override retval if needed
-        if (retVal !== newRet) {
-          send(
-            c.blackBright(`[${job.identifier}] `) + `Return value was not ${c.red(newRet.toString())}, ` +
-            `setting to ${c.green(newRet.toString())}.`,
-          );
-          // update the return value
-          retVal = newRet;
-        }
-        return retVal;
-      };
-
-      // record override
-      if (job.implementations) {
-        job.implementations.push(m);
-      } else {
-        job.implementations = [ m ];
-      }
-      
-    });
-
-    jobs.add(job);
+      send(c.red(`Error setting return value for ${fqClazz}: ${message}`));
+    }
   });
 };

@@ -3,7 +3,7 @@ import shutil
 
 import click
 import delegator
-from pkg_resources import parse_version
+from packaging.version import Version
 
 from ..utils.patchers.android import AndroidGadget, AndroidPatcher
 from ..utils.patchers.github import Github
@@ -49,7 +49,7 @@ def patch_ios_ipa(source: str, codesign_signature: str, provision_file: str, bin
 
     # check if the local version needs updating. this can be either because
     # the version is outdated or we simply don't have the gadget yet
-    if parse_version(github_version) != parse_version(local_version) or not ios_gadget.gadget_exists():
+    if Version(github_version) != Version(local_version) or not ios_gadget.gadget_exists():
         # download!
         click.secho('Remote FridaGadget version is v{0}, local is v{1}. Downloading...'.format(
             github_version, local_version), fg='green')
@@ -100,7 +100,8 @@ def patch_android_apk(source: str, architecture: str, pause: bool, skip_cleanup:
                       enable_debug: bool = True, gadget_version: str = None, skip_resources: bool = False,
                       network_security_config: bool = False, target_class: str = None,
                       use_aapt2: bool = False, gadget_config: str = None, script_source: str = None,
-                      ignore_nativelibs: bool = True, manifest: str = None, skip_signing: bool = False, only_main_classes: bool = False) -> None:
+                      ignore_nativelibs: bool = True, manifest: str = None, skip_signing: bool = False,
+                      only_main_classes: bool = False, fix_concurrency_to = None) -> None:
     """
         Patches an Android APK by extracting, patching SMALI, repackaging
         and signing a new APK.
@@ -119,6 +120,9 @@ def patch_android_apk(source: str, architecture: str, pause: bool, skip_cleanup:
         :param script_source:
         :param manifest:
         :param skip_signing:
+        :param ignore_nativelibs:
+        :param only_main_classes:
+        :param fix_concurrency_to:
 
         :return:
     """
@@ -163,7 +167,7 @@ def patch_android_apk(source: str, architecture: str, pause: bool, skip_cleanup:
     # check if the local version needs updating. this can be either because
     # the version is outdated or we simply don't have the gadget yet, or, we want
     # a very specific version
-    if parse_version(github_version) != parse_version(local_version) or not android_gadget.gadget_exists():
+    if Version(github_version) != Version(local_version) or not android_gadget.gadget_exists():
         # download!
         click.secho('Remote FridaGadget version is v{0}, local is v{1}. Downloading...'.format(
             github_version, local_version), fg='green')
@@ -189,7 +193,7 @@ def patch_android_apk(source: str, architecture: str, pause: bool, skip_cleanup:
 
     # work on patching the APK
     patcher.set_apk_source(source=source)
-    patcher.unpack_apk()
+    patcher.unpack_apk(fix_concurrency_to=fix_concurrency_to)
     patcher.inject_internet_permission()
 
     if not ignore_nativelibs:
@@ -219,7 +223,7 @@ def patch_android_apk(source: str, architecture: str, pause: bool, skip_cleanup:
 
         input('Press ENTER to continue...')
 
-    patcher.build_new_apk(use_aapt2=use_aapt2)
+    patcher.build_new_apk(use_aapt2=use_aapt2, fix_concurrency_to=fix_concurrency_to)
     patcher.zipalign_apk()
     if not skip_signing:
         patcher.sign_apk()

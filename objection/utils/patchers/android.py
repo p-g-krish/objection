@@ -13,6 +13,7 @@ import semver
 
 from .base import BasePlatformGadget, BasePlatformPatcher, objection_path
 from .github import Github
+from ..helpers import debug_print
 
 
 class AndroidGadget(BasePlatformGadget):
@@ -192,7 +193,7 @@ class AndroidPatcher(BasePlatformPatcher):
             'installation': 'apt install apksigner (Kali Linux)'
         },
         'apktool': {
-            'installation': 'apt install apktool (Kali Linux)'
+            'installation': 'Install from https://apktool.org/docs/install'
         },
         'zipalign': {
             'installation': 'apt install zipalign (Kali Linux)'
@@ -223,7 +224,7 @@ class AndroidPatcher(BasePlatformPatcher):
             :return:bool
         """
 
-        min_version = '2.4.1'  # the version of apktool we require
+        min_version = '2.6.0'  # the version of apktool we require
 
         o = delegator.run(self.list2cmdline([
             self.required_commands['apktool']['location'],
@@ -235,6 +236,11 @@ class AndroidPatcher(BasePlatformPatcher):
         # string we want is always the first line.
         if len(o.split('\n')) > 1:
             o = o.split('\n')[0]
+
+        # Apktool v2.12.0 has changed the syntax `apktool -version, this grabs the version from the usage screen output
+        # instead of re-running as `apktool v`.
+        if len(o.split(' ')) > 1:
+            o = o.split(' ')[1]
 
         if len(o) == 0:
             click.secho('Unable to determine apktool version. Is it installed')
@@ -391,7 +397,7 @@ class AndroidPatcher(BasePlatformPatcher):
 
         return self.apk_temp_directory
 
-    def unpack_apk(self):
+    def unpack_apk(self, fix_concurrency_to = None):
         """
             Unpack an APK with apktool.
 
@@ -400,16 +406,21 @@ class AndroidPatcher(BasePlatformPatcher):
 
         click.secho('Unpacking {0}'.format(self.apk_source), dim=True)
 
+
         o = delegator.run(self.list2cmdline([
             self.required_commands['apktool']['location'],
             'decode',
             '-f',
-            '-r' if self.skip_resources else '',
-            '--only-main-classes' if self.only_main_classes else '',
+        ] +
+          (['-r'] if self.skip_resources else []) +
+          (['--only-main-classes'] if self.only_main_classes else []) +
+        [
             '-o',
             self.apk_temp_directory,
             self.apk_source
-        ]), timeout=self.command_run_timeout)
+        ] + ([] if fix_concurrency_to is None else ['-j', fix_concurrency_to])), timeout=self.command_run_timeout)
+
+        debug_print("Command:" + o.cmd)
 
         if len(o.err) > 0:
             click.secho('An error may have occurred while extracting the APK.', fg='red')
@@ -878,7 +889,7 @@ class AndroidPatcher(BasePlatformPatcher):
             click.secho('Adding a gadget configuration file...', fg='green')
             shutil.copyfile(gadget_config, os.path.join(libs_path, 'libfrida-gadget.config.so'))
 
-    def build_new_apk(self, use_aapt2: bool = False):
+    def build_new_apk(self, use_aapt2: bool = False, fix_concurrency_to = None):
         """
             Build a new .apk with the frida-gadget patched in.
 
@@ -888,12 +899,14 @@ class AndroidPatcher(BasePlatformPatcher):
         click.secho('Rebuilding the APK with the frida-gadget loaded...', fg='green', dim=True)
         o = delegator.run(
             self.list2cmdline([self.required_commands['apktool']['location'],
-                               'build',
-                               self.apk_temp_directory,
-                               ] + (['--use-aapt2'] if use_aapt2 else []) + [
-                                  '-o',
-                                  self.apk_temp_frida_patched
-                              ]), timeout=self.command_run_timeout)
+                            'build',
+                            self.apk_temp_directory,
+                            ] + (['--use-aapt2'] if use_aapt2 else []) + [
+                                '-o',
+                                self.apk_temp_frida_patched
+                            ]+ ([] if fix_concurrency_to is None else ['-j', fix_concurrency_to]))
+                            , timeout=self.command_run_timeout)
+        
 
         if len(o.err) > 0:
             click.secho(('Rebuilding the APK may have failed. Read the following '

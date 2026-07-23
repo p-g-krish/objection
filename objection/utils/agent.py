@@ -12,7 +12,7 @@ import frida
 from objection.state.app import app_state
 from objection.state.connection import state_connection
 from objection.state.device import device_state, Ios, Android
-from objection.state.jobs import job_manager_state
+from objection.state.jobs import job_manager_state, Job
 from objection.utils.helpers import debug_print
 
 
@@ -199,16 +199,19 @@ class Agent(object):
         """
 
         if (self.config.name is None) and (not self.config.foremost):
-            raise Exception('Need a target name to spawn/attach to')
+            click.secho('Need a target name to spawn/attach to', fg='red')
+            sys.exit(1)
 
         if self.config.foremost:
             try:
                 app = self.device.get_frontmost_application()
             except Exception as e:
-                raise Exception(f'Could not get foremost application on {self.device.name}: {e}')
+                click.secho(f'Could not get foremost application on {self.device.name}: {e}', fg='red')
+                sys.exit(1)
 
             if app is None:
-                raise Exception(f'No foremost application on {self.device.name}')
+                click.secho(f'No foremost application on {self.device.name}', fg='red')
+                sys.exit(1)
 
             self.pid = app.pid
             # update the global state for the prompt etc.
@@ -216,9 +219,25 @@ class Agent(object):
 
         elif self.config.spawn:
             if self.config.uid is not None:
+                if self.device.query_system_parameters()['os']['id'] != 'android':
+                    raise Exception('--uid flag can only be used on Android.')
                 self.pid = self.device.spawn(self.config.name, uid=int(self.config.uid))
             else:
-                self.pid = self.device.spawn(self.config.name)
+                try:
+                    self.pid = self.device.spawn(self.config.name)
+                except frida.InvalidArgumentError:
+                    pass
+
+                # Maybe we have an app name and not identifier
+                app_list = self.device.enumerate_applications()
+                app_name_lc = self.config.name.lower()
+
+                matching_app = [app for app in app_list if app.name.lower() == app_name_lc]
+                # Don't care about matching_app[0].pid not in (0, None), if already running we restart anyway.
+                if len(matching_app) == 1:
+                    debug_print("Found app by name instead of package, spawning.")
+                    self.pid = self.device.spawn(matching_app[0].identifier)
+
             self.resumed = False
         else:
             # check if the name is actually an integer. this way we can
@@ -228,9 +247,29 @@ class Agent(object):
             except ValueError:
                 pass
 
+            # maybe we have a process name
             if self.pid is None:
-                # last resort, maybe we have a process name
-                self.pid = self.device.get_process(self.config.name).pid
+                try:
+                    self.pid = self.device.get_process(self.config.name).pid
+                except frida.ProcessNotFoundError:
+                    pass
+
+            if self.pid is None:
+                # maybe we have an app identifier/package name
+                app_list = self.device.enumerate_applications()
+                app_name_lc = self.config.name.lower()
+                matching_app = [app for app in app_list if app.identifier.lower() == app_name_lc]
+                if len(matching_app) == 1 and matching_app[0].pid not in (0, None):
+                    debug_print("Found app by package name.")
+                    self.pid = matching_app[0].pid
+                elif len(matching_app) > 1:
+                    app_list_str = ', '.join([f"{app.identifier}: {app.pid}" for app in matching_app])
+                    click.secho("Ambiguous identifier. Applications with the same identifier found: "+ app_list_str, fg='red')
+                    sys.exit(1)
+
+        if self.pid is None:
+            click.secho("Unable to find target application.", fg='red', bold=True)
+            sys.exit(1)
 
         debug_print(f'process PID determined as {self.pid}')
 
@@ -245,9 +284,10 @@ class Agent(object):
             raise Exception('A PID needs to be set before attach()')
 
         if self.config.uid is None:
+            debug_print(f'Attaching to PID: {self.pid}')
             self.session = self.device.attach(self.pid)
         else:
-            self.session = self.device.attach(self.pid, uid=self.config.uid)
+            self.session = self.device.attach(self.pid)
 
         self.session.on('detached', self.handlers.session_on_detached)
 
@@ -261,20 +301,22 @@ class Agent(object):
         self.script.on('message', self.handlers.script_on_message)
         self.script.load()
 
-    def attach_script(self, source):
+    def attach_script(self, job_name, source):
         """
             Attaches an arbitrary script session.
 
-            # TODO: Implement some script management so we could unload these later.
-
+            :param job_name:
             :param source:
             :return:
         """
 
-        session = self.device.attach(self.pid)
-        script = session.create_script(source=source)
+        session: frida.core.Session = self.device.attach(self.pid)
+        script: frida.core.Script = session.create_script(source=source)
         script.on('message', self.handlers.script_on_message)
         script.load()
+
+        script_job = Job(job_name, 'script', script)
+        job_manager_state.add_job(script_job)
 
     def update_device_state(self):
         """
@@ -291,6 +333,12 @@ class Agent(object):
             device_state.set_platform(Ios)
         elif params['os']['id'] == 'android':
             device_state.set_platform(Android)
+        else:
+            rt = self.exports().env_runtime()
+            if rt == 'ios':
+                device_state.set_platform(Ios)
+            elif rt == 'android':
+                device_state.set_platform(Android)                
 
         # set os version
         device_state.set_version(params['os']['version'])
@@ -321,7 +369,7 @@ class Agent(object):
         if not self.script:
             raise Exception('Need a script created before reading exports()')
 
-        return self.script.exports
+        return self.script.exports_sync
 
     def run(self):
         """

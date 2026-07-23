@@ -1,3 +1,4 @@
+import type { default as JavaTypes } from "frida-java-bridge";
 import * as clipboard from "../android/clipboard.js";
 import * as androidfilesystem from "../android/filesystem.js";
 import * as heap from "../android/heap.js";
@@ -57,7 +58,7 @@ export const android = {
     hooking.setReturnValue(fqClazz, filterOverload, ret),
   androidHookingWatch: (pattern: string, watchArgs: boolean, watchBacktrace: boolean, watchRet: boolean): Promise<void> =>
     hooking.watch(pattern, watchArgs, watchBacktrace, watchRet),
-  androidHookingEnumerate: (query: string): Promise<Java.EnumerateMethodsMatchGroup[]> => hooking.javaEnumerate(query),
+  androidHookingEnumerate: (query: string): Promise<JavaTypes.EnumerateMethodsMatchGroup[]> => hooking.javaEnumerate(query),
   androidHookingLazyWatchForPattern: (query: string, watch: boolean, dargs: boolean, dret: boolean, dbt: boolean): void => hooking.lazyWatchForPattern(query, watch, dargs, dret, dbt),
 
   // android heap methods
@@ -71,12 +72,13 @@ export const android = {
   // android intents
   androidIntentStartActivity: (activityClass: string): Promise<void> => intent.startActivity(activityClass),
   androidIntentStartService: (serviceClass: string): Promise<void> => intent.startService(serviceClass),
+  androidIntentAnalyze: (backtrace: boolean = false): Promise<void> => intent.analyzeImplicits(backtrace),
 
   // android keystore
   androidKeystoreClear: () => keystore.clear(),
   androidKeystoreList: (): Promise<IKeyStoreEntry[]> => keystore.list(),
   androidKeystoreDetail: (): Promise<IKeyStoreDetail[]> => keystore.detail(),
-  androidKeystoreWatch: (): void => keystore.watchKeystore(),
+  androidKeystoreWatch: (): Promise<void> => keystore.watchKeystore(),
 
   // android ssl pinning
   androidSslPinningDisable: (quiet: boolean) => sslpinning.disable(quiet),

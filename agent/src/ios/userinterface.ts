@@ -1,7 +1,8 @@
 // tslint:disable-next-line:no-var-requires
+import { ObjC } from "../ios/lib/libobjc.js";
+import type { default as ObjCTypes } from "frida-objc-bridge";
 import screenshot from "frida-screenshot";
 import { colors as c } from "../lib/color.js";
-import { IJob } from "../lib/interfaces.js";
 import * as jobs from "../lib/jobs.js";
 
 
@@ -20,7 +21,7 @@ export const alert = (message: string): void => {
 
   // Defining a Block that will be passed as handler parameter
   // to +[UIAlertAction actionWithTitle:style:handler:]
-  const handler: ObjC.Block = new ObjC.Block({
+  const handler = new ObjC.Block({
     argTypes: ["object"],
     implementation: () => { return; },
     retType: "void",
@@ -30,11 +31,11 @@ export const alert = (message: string): void => {
   ObjC.schedule(ObjC.mainQueue, () => {
 
     // Using integer numerals for preferredStyle which is of type enum UIAlertControllerStyle
-    const alertController: ObjC.Object = UIAlertController.alertControllerWithTitle_message_preferredStyle_(
+    const alertController: ObjCTypes.Object = UIAlertController.alertControllerWithTitle_message_preferredStyle_(
       "Alert", message, 1);
 
     // Again using integer numeral for style parameter that is enum
-    const okButton: ObjC.Object = UIAlertAction.actionWithTitle_style_handler_("OK", 0, handler);
+    const okButton: ObjCTypes.Object = UIAlertAction.actionWithTitle_style_handler_("OK", 0, handler);
     alertController.addAction_(okButton);
 
     // Instead of using `ObjC.choose()` and looking for UIViewController instances
@@ -76,11 +77,7 @@ export const biometricsBypass = (): void => {
   //                             }
   //                         }];
 
-  const policyJob: IJob = {
-    identifier: jobs.identifier(),
-    invocations: [],
-    type: "ios-biometrics-disable-evaluatePolicy",
-  };
+  const policyJob: jobs.Job = new jobs.Job(jobs.identifier(), "ios-biometrics-disable-evaluatePolicy");
 
   const lacontext1: InvocationListener = Interceptor.attach(
     ObjC.classes.LAContext["- evaluatePolicy:localizedReason:reply:"].implementation, {
@@ -128,21 +125,13 @@ export const biometricsBypass = (): void => {
   });
 
   // register the job
-  if (policyJob.invocations) {
-    policyJob.invocations.push(lacontext1);
-  } else {
-    policyJob.invocations = [lacontext1];
-  }
+  policyJob.addInvocation(lacontext1);
   jobs.add(policyJob);
 
   // -- Sample Swift
   // https://gist.github.com/algrid/f3f03915f264f243b9d06e875ad198c8/raw/03998319903ad9d939f85bbcc94ce9c23042b82b/KeychainBio.swift
 
-  const accessControlJob: IJob = {
-    identifier: jobs.identifier(),
-    invocations: [],
-    type: "ios-biometrics-disable-evaluateAccessControl",
-  };
+  const accessControlJob: jobs.Job = new jobs.Job(jobs.identifier(), "ios-biometrics-disable-evaluateAccessControl");
 
   const lacontext2: InvocationListener = Interceptor.attach(
     ObjC.classes.LAContext["- evaluateAccessControl:operation:localizedReason:reply:"].implementation, {
@@ -190,10 +179,6 @@ export const biometricsBypass = (): void => {
   });
 
   // register the job
-  if (accessControlJob.invocations) {
-    accessControlJob.invocations.push(lacontext2);
-  } else {
-    accessControlJob.invocations = [lacontext2];
-  }
+  accessControlJob.addInvocation(lacontext2);
   jobs.add(accessControlJob);
 };
